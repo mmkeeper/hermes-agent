@@ -2940,6 +2940,19 @@ This compaction should PRIORITISE preserving all information related to the focu
 
         compressed = self._sanitize_tool_pairs(compressed)
 
+        # Guard: LM Studio / llama.cpp jinja templates require at least one
+        # user-role message.  After compression, if the summary landed as
+        # role="assistant" and the tail only contained assistant/tool messages,
+        # the entire list can end up without any user message — causing
+        # "No user query found in messages." errors.  Fix by converting the
+        # compressed-summary message to role="user" when no user message exists.
+        _has_user = any(m.get("role") == "user" for m in compressed)
+        if not _has_user:
+            for m in reversed(compressed):
+                if m.get(COMPRESSED_SUMMARY_METADATA_KEY):
+                    m["role"] = "user"
+                    break
+
         # Replace image parts in all compressed messages before the newest
         # image-bearing user turn with a short text placeholder. Without
         # this, tail messages keep their original multi-MB base-64 image
