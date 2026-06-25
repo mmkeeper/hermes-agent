@@ -2947,11 +2947,20 @@ This compaction should PRIORITISE preserving all information related to the focu
         # "No user query found in messages." errors.  Fix by converting the
         # compressed-summary message to role="user" when no user message exists.
         _has_user = any(m.get("role") == "user" for m in compressed)
-        if not _has_user:
+        if not _has_user and compressed:
+            # Try the compressed-summary marker first
+            _fixed = False
             for m in reversed(compressed):
                 if m.get(COMPRESSED_SUMMARY_METADATA_KEY):
                     m["role"] = "user"
+                    _fixed = True
                     break
+            # Fallback: convert the last assistant message to user
+            if not _fixed:
+                for m in reversed(compressed):
+                    if m.get("role") == "assistant":
+                        m["role"] = "user"
+                        break
 
         # Replace image parts in all compressed messages before the newest
         # image-bearing user turn with a short text placeholder. Without
