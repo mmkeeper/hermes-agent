@@ -2909,31 +2909,45 @@ This compaction should PRIORITISE preserving all information related to the focu
         for i in range(compress_end, n_messages):
             msg = messages[i].copy()
             if _merge_summary_into_tail and i == compress_end:
-                # Merge the summary into the first tail message, but place
-                # the END MARKER at the very end so the model sees an
-                # unambiguous boundary. Old tail content is preserved as
-                # reference material BEFORE the summary, clearly delimited
-                # so it is not mistaken for a new message to respond to.
-                # Uses _append_text_to_content to safely handle both
-                # string and multimodal-list content types.
-                # Fixes ghost-message leakage across compaction boundaries
-                # where old head messages survived verbatim and appeared
-                # before the summary.
-                old_content = msg.get("content", "")
-                suffix = (
-                    "\n\n" + _MERGED_SUMMARY_DELIMITER + "\n\n"
-                    + summary + "\n\n"
-                    + _SUMMARY_END_MARKER
-                )
-                msg["content"] = _append_text_to_content(
-                    _append_text_to_content(old_content, suffix, prepend=False),
-                    _MERGED_PRIOR_CONTEXT_HEADER + "\n",
-                    prepend=True,
-                )
-                # Mark the merged message so frontends can identify it as
-                # containing a compression summary prefix.
-                msg[COMPRESSED_SUMMARY_METADATA_KEY] = True
-                _merge_summary_into_tail = False
+                # If the first tail message has tool_calls, merging the
+                # summary into it would create a user-role message with
+                # orphaned tool_calls, breaking jinja templates.  Instead,
+                # insert the summary as a standalone user message and keep
+                # the original message unchanged.
+                if msg.get("tool_calls"):
+                    compressed.append({
+                        "role": "user",
+                        "content": summary + "\n\n" + _SUMMARY_END_MARKER,
+                        COMPRESSED_SUMMARY_METADATA_KEY: True,
+                    })
+                    _merge_summary_into_tail = False
+                    # Fall through to append the original message below
+                else:
+                    # Merge the summary into the first tail message, but place
+                    # the END MARKER at the very end so the model sees an
+                    # unambiguous boundary. Old tail content is preserved as
+                    # reference material BEFORE the summary, clearly delimited
+                    # so it is not mistaken for a new message to respond to.
+                    # Uses _append_text_to_content to safely handle both
+                    # string and multimodal-list content types.
+                    # Fixes ghost-message leakage across compaction boundaries
+                    # where old head messages survived verbatim and appeared
+                    # before the summary.
+                    old_content = msg.get("content", "")
+                    suffix = (
+                        "\n\n" + _MERGED_SUMMARY_DELIMITER + "\n\n"
+                        + summary + "\n\n"
+                        + _SUMMARY_END_MARKER
+                    )
+                    msg["content"] = _append_text_to_content(
+                        _append_text_to_content(old_content, suffix, prepend=False),
+                        _MERGED_PRIOR_CONTEXT_HEADER + "\n",
+                        prepend=True,
+                    )
+                    # Mark the merged message so frontends can identify it as
+                    # containing a compression summary prefix.
+                    msg[COMPRESSED_SUMMARY_METADATA_KEY] = True
+                    _merge_summary_into_tail = False
             compressed.append(msg)
 
         self.compression_count += 1
