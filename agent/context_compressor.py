@@ -2941,26 +2941,45 @@ This compaction should PRIORITISE preserving all information related to the focu
         compressed = self._sanitize_tool_pairs(compressed)
 
         # Guard: LM Studio / llama.cpp jinja templates require at least one
-        # user-role message.  After compression, if the summary landed as
-        # role="assistant" and the tail only contained assistant/tool messages,
-        # the entire list can end up without any user message — causing
-        # "No user query found in messages." errors.  Fix by converting the
-        # compressed-summary message to role="user" when no user message exists.
-        _has_user = any(m.get("role") == "user" for m in compressed)
-        if not _has_user and compressed:
-            # Try the compressed-summary marker first
-            _fixed = False
-            for m in reversed(compressed):
-                if m.get(COMPRESSED_SUMMARY_METADATA_KEY):
-                    m["role"] = "user"
-                    _fixed = True
-                    break
-            # Fallback: convert the last assistant message to user
-            if not _fixed:
+        # user-role message, AND the first message after system must be user
+        # (not assistant).  After compression, if the summary landed as
+        # role="assistant" and sits at position 0 (first after system), the
+        # template fails with "No user query found in messages." even when
+        # user messages exist later in the list.  Convert the compressed-
+        # summary message to role="user" in two cases:
+        #   1. No user message exists at all (original guard)
+        #   2. The summary is the first message after system (LM Studio strict
+        #      alternation requires user-first ordering)
+        #
+        # Also strip tool_calls from the summary message — when the summary
+        # is merged into an assistant message via _merge_summary_into_tail,
+        # the original tool_calls are preserved, which confuses the template
+        # (it sees tool calls without a preceding user request).
+        if compressed:
+            _has_user = any(m.get("role") == "user" for m in compressed)
+            _first_non_system = next(
+                (m for m in compressed if m.get("role") != "system"), None
+            )
+            _first_is_summary = (
+                _first_non_system is not None
+                and _first_non_system.get(COMPRESSED_SUMMARY_METADATA_KEY)
+            )
+            if not _has_user or _first_is_summary:
+                # Try the compressed-summary marker first
+                _fixed = False
                 for m in reversed(compressed):
-                    if m.get("role") == "assistant":
+                    if m.get(COMPRESSED_SUMMARY_METADATA_KEY):
                         m["role"] = "user"
+                        m.pop("tool_calls", None)
+                        _fixed = True
                         break
+                # Fallback: convert the last assistant message to user
+                if not _fixed:
+                    for m in reversed(compressed):
+                        if m.get("role") == "assistant":
+                            m["role"] = "user"
+                            m.pop("tool_calls", None)
+                            break
 
         # Replace image parts in all compressed messages before the newest
         # image-bearing user turn with a short text placeholder. Without
